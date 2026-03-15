@@ -1,0 +1,10 @@
+{
+	"image": "cs5544-llvm-personal-stats",
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"ms-vscode.cpptools"
+			]
+		}
+	}
+}

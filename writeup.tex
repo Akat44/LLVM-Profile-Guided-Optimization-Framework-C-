@@ -1,0 +1,231 @@
+\documentclass{article}
+
+\usepackage[margin=.75in]{geometry}
+\usepackage{amsthm,mathtools,amssymb,amsmath}
+\usepackage[USenglish]{babel}
+\usepackage{hyperref}     % Used for better URL formatting
+\usepackage{microtype} % Help text fit on the page more, rather than spilling into the margins
+\usepackage{fancyhdr}
+\usepackage[inline]{enumitem}
+\usepackage[bold-style=ISO]{unicode-math}
+\usepackage[outputdir=../]{minted}
+\usepackage{tikz}
+\usepackage{mdframed}
+\usepackage{tabularray}
+\usepackage{subcaption}
+
+\usepackage{cleveref} % Must be loaded last
+
+\usetikzlibrary{chains, arrows.meta, external, scopes, shadows}
+\UseTblrLibrary{booktabs, siunitx}
+% \tikzexternalize[prefix=out/]
+
+\setmathfont{NewCMMath-Regular}
+\setmathfont{Concrete Math}[range={cal, bfcal}]
+% \setmathfont{texgyrepagella-math.otf}[range=bb]
+
+% Clickable link configuration
+\hypersetup{
+	linktoc = all,      % Have the entire TOC line link to the page
+	pdfborder = {0 0 0} % Remove link borders
+}
+
+\mdfsetup{skipabove=0pt,skipbelow=0pt,frametitlebelowskip=-11pt}
+
+% Title page information
+\title{Assignment 3\\{\large CS 5544}\\{\large Compiler Optimizations}}
+\author{Alexander Novotny (anovotny)\\Arya Katoch (arya4)}
+
+% Setup headers for page numbers
+\pagestyle{fancy}
+\rhead{Novotny \& Katoch}
+\lhead{CS 5544 HW 3}
+
+\pagenumbering{arabic} % Change page numbering to lowercase roman for pre-pages
+
+\begin{document}
+
+\maketitle
+
+\section{Dominator Analysis Pass}
+\begin{itemize}
+	\item \textbf{Purpose:} Computes the set of blocks that dominate each basic block and reports the immediate dominator—information required to discover loops and enable subsequent optimizations.
+	\item \textbf{Implementation Details:}
+	      \begin{itemize}
+		      \item a \textbf{forward} data-flow analysis that inherits from a generic
+		            CRTP framework (\verb|Dataflow<T>|);
+		      \item using the \emph{intersection} meet-operator
+		            (\verb|MeetIntersect|), so each block's \texttt{OUT} set equals the
+		            intersection of its predecessors' \texttt{OUT} sets;
+		      \item with boundary condition \textbf{ENTRY = \{$entry$\}}, all other
+		            \texttt{OUT} sets initialised to the universal set.
+	      \end{itemize}
+	      The local transfer function is
+	      \[
+		      \text{OUT}(B)=\text{IN}(B)\cup\{B\},
+	      \]
+	      implemented by simply setting the bit that corresponds to the current
+	      basic block.
+
+	      After the fixed-point iteration converges the pass
+
+	      \begin{enumerate}\itemsep0.2ex
+		      \item detects back-edges \((tail \rightarrow head)\) where
+		            \texttt{head} dominates \texttt{tail};
+		      \item gathers all blocks reachable through predecessors to form the
+		            natural loop;
+		      \item prints, for every block in that loop, its \emph{immediate
+			            dominator} (computed by set inclusion on the final dominator
+		            bit-vectors).
+	      \end{enumerate}
+
+	\item \textbf{Results:} No optimizations are applied during this pass.
+
+\end{itemize}
+
+\section{Dead Code Elimination (DCE)}
+\begin{itemize}
+	\item \textbf{Purpose:} This pass removes instructions that compute results never
+	      observed by the program.
+	\item \textbf{Implementation Details:}
+	      \begin{itemize}
+		      \item \textbf{Seeding}\,:Any non-terminator, non-debug instruction with \verb|use_empty()| being true is added to a FIFO work-list and inserted into a \texttt{deadSet}.
+		      \item \textbf{Backward propagation}\,: while the queue is non-empty, pop an instruction~$I$; if \emph{all} users of an operand~$O$ are already in~\texttt{deadSet}, mark~$O$ as dead and enqueue it. This realises a BFS over the SSA def-use graph.
+		      \item \textbf{Deletion}\,: after convergence every dead instruction is
+		            replaced with \verb|undef| (if still used) and removed via
+		            \verb|eraseFromParent()|; the pass returns \texttt{true} when at least
+		            one instruction is erased.
+	      \end{itemize}
+
+	\item \textbf{Results:}
+
+	      \begin{center}
+		      \begin{tblr}{
+			      colspec = {lS[table-format=2]S[table-format=1]S[table-format=-2\%]},
+			      row{1} = {guard},
+			      }
+			      \toprule
+			      \textbf{Benchmark}         & \textbf{Before} & \textbf{After} & \textbf{Δ} \\
+			      \midrule
+			      \texttt{provided.c}        & 36              & 6              & -83\%      \\
+			      \texttt{dead\_arith.c}     & 19              & 3              & -84\%      \\
+			      \texttt{dead\_store.c}     & 6               & 1              & -83\%      \\
+			      \texttt{cascade\_unused.c} & 30              & 1              & -97\%      \\
+			      \bottomrule
+		      \end{tblr}
+	      \end{center}
+
+	      The pass successfully deletes:
+	      \begin{itemize}\itemsep0.2ex
+		      \item Unused arithmetic chains (\texttt{dead\_arith.c}).
+		      \item Redundant stores to non-escaping \texttt{alloca}s
+		            (\texttt{dead\_store.c}).
+		      \item Cascaded temporaries (\texttt{cascade\_unused.c}).
+	      \end{itemize}
+
+	      Overall, the custom DCE removes \textbf{80-97\%} of executed instructions on
+	      these micro-benchmarks, exhibiting both accuracy and efficacy.
+
+
+\end{itemize}
+
+
+\section{Loop Invariant Code Motion}
+\begin{itemize}
+
+	\item \textbf{Purpose:} Identifies loop-invariant instructions and moves them to the loop's preheader, employing a landing-pad transformation if necessary, to decrease the amount of operations performed within the loop.
+
+	\item \textbf{Implementation Details:} The pass first identifies loop-invariant instructions as discussed in class - using a fixed-point iteration over all instructions and determining if their operands are either constant or loop invariants. Then, the loop header is checked to determine if it is a conditional block or straight-forward block by examining its number of successors in and out of the loop. In the case where all of its successors belong to the loop (such as when the loop is a do-while loop), a code motion block is inserted between the pre-header and the header. Otherwise, the following process (which assumes a single in-loop successor to the loop header block - the loop body) to insert a code motion block is followed:
+	      \begin{enumerate}
+		      \item The original header block is cloned, and all latches (blocks within the loop that are predecessors of the header) are set to point to this new ``conditional'' block, instead. Then the only predecessor of the original header is the preheader.
+		      \item All phi nodes in the original header are modified to remove all latch block information, and all phi nodes in the new conditional block are modified to remove preheader block information.
+		      \item All successors of original header (which are also successors of the new conditional block) have their phi nodes updated to include the cloned variables in the conditional block.
+		      \item All instructions in the new conditional block are updated to use the cloned instructions for their operands.
+		      \item Two new blocks are created - a code motion block in between the original header and the loop body, and a ``phi glue'' block in between the code motion block and the loop body.
+		      \item The new conditional block has its successors updated to point to the new phi glue block instead of the loop body.
+		      \item For each instruction which defines a new variable in the original header block (which are cloned in the conditional block), a phi node is inserted in the phi glue block, which picks the version of the variable from the original header when the edge from the code motion block is taken, and picks the cloned version when the edge from the conditional block is taken. Then all uses of the variables from the original header in the loop body are updated to use these new phi nodes instead.
+	      \end{enumerate}
+
+	      This process has been illustrated in \cref{fig:code-motion}.
+
+	      \begin{figure}[H]
+		      \centering
+		      \caption{Inserting a code motion block into a conditional loop}
+		      \label{fig:code-motion}
+		      \begin{subfigure}[c]{.4\textwidth}
+			      \centering
+			      \begin{tikzpicture}[
+				      start chain=going below,
+				      every on chain/.style={draw, join=by -{Stealth}},
+				      multi/.style={double copy shadow, shadow xshift=2pt, shadow yshift=2pt, fill=white}
+				      ]
+				      \node[on chain] (prehead) {Pre-Header};
+				      \node[on chain] (header) {Header};
+
+				      { [start branch=branch going right]
+				      \node[on chain, multi] (exit) {Exit};
+				      }
+
+				      \node[on chain] (body) {Body};
+				      \node[on chain, multi] (latch) {Latch};
+
+				      \path (body) -- (latch) node[pos=.5,fill=white] {\(\dots\)};
+				      \draw[-{Stealth}] (latch) |- +(-1.5,-.75) |- (header);
+			      \end{tikzpicture}
+			      \caption{Original Control Flow}
+		      \end{subfigure}
+		      \begin{subfigure}[c]{.4\textwidth}
+			      \centering
+			      \begin{tikzpicture}[
+				      start chain=going below,
+				      every on chain/.style={draw, join=by -{Stealth}},
+				      multi/.style={double copy shadow, shadow xshift=2pt, shadow yshift=2pt, fill=white}
+				      ]
+				      \node[on chain] (prehead) {Pre-Header};
+				      \node[on chain] (header) {Header};
+
+				      { [start branch=branch going right]
+				      \node[on chain, multi] (exit) {Exit};
+				      }
+
+				      \node[on chain] (codemotion) {Code Motion};
+				      \node[on chain] (phiglue) {Phi Glue};
+				      \node[on chain] (body) {Body};
+				      \node[on chain, multi] (latch) {Latch};
+				      \node[on chain] (cond) {Condition};
+
+				      \path (body) -- (latch) node[pos=.5,fill=white] {\(\dots\)};
+				      \draw[-{Stealth}] (cond) -| (exit);
+				      \draw[-{Stealth}] (cond) |- +(-1.5,-.75) |- (phiglue);
+			      \end{tikzpicture}
+			      \caption{New Control Flow}
+		      \end{subfigure}
+	      \end{figure}
+
+	      Note that further optimization can be done. Notably, the resulting phi glue block may be able to be merged into the loop body block, and a liveness analysis of phi nodes in this block may reveal unneeded phi nodes.
+
+	      Then, a dominator analysis is run on the (potentially altered) CFG to identify the set of all blocks which dominate every exit in the loop. The transformations from above can help during this part in the common case of a for loop or a while loop, since the header commonly exits immediately - in the case of a failed condition - and no blocks will dominate that exit except for the header, which typically contains very little code. The transformations above essentially turn every for/while loop into a do-while loop surrounded by an if statement, so that the body of the loop dominates all exits.
+
+	      Finally, a fixed-point algorithm moves instructions which were previously determined to be loop-invariant and which are executed in a block belonging to the set of blocks which dominate all loop exits to the inserted code motion block as long as all operands have either already been moved to the code motion block, or are constant. Loop-invariant instructions do not need to be checked for reaching definitions and domination of uses, since LLVM's SSA format requires that each operand only has a single definition which dominates all uses (and therefore exactly 1 reaching definition always).
+
+	\item \textbf{Results:}
+	      \begin{center}
+		      \begin{tblr}{
+			      colspec = {lS[table-format=9]S[table-format=9]S[table-format=-2\%]},
+			      row{1} = {guard},
+			      }
+			      \toprule
+			      \textbf{Benchmark}         & \textbf{Before} & \textbf{After} & \textbf{Δ} \\
+			      \midrule
+			      \texttt{provided.c}        & 1120            & 609            & -45\%      \\
+			      \texttt{matrix-multiply.c} & 257806622       & 153365612      & -40\%      \\
+			      \texttt{dowhile.c}         & 1017            & 407            & -60\%      \\
+			      \texttt{early-exit.c}      & 96878           & 1407           & -98\%      \\
+			      \bottomrule
+		      \end{tblr}
+	      \end{center}
+
+
+\end{itemize}
+
+\end{document}

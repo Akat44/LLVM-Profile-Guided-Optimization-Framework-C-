@@ -1,0 +1,22 @@
+build/
+.vscode/
+out/
+profile-data/
+_minted*
+
+profile_data.json
+
+# Latex intermediate files
+*.aux
+*.auxlock
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.synctex*
+
+*.tar.gz
+
+# Added by cargo
+
+/target

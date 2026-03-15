@@ -1,0 +1,40 @@
+BasedOnStyle: Google
+ColumnLimit: 120
+AccessModifierOffset: -4
+AlignAfterOpenBracket: Align
+AlignConsecutiveAssignments: true
+AlignOperands: true
+AlignTrailingComments: true
+AllowShortBlocksOnASingleLine: true
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: true
+AlwaysBreakAfterReturnType: None
+AlwaysBreakTemplateDeclarations: true
+BreakBeforeBraces: Attach
+Cpp11BracedListStyle: true
+IndentCaseLabels: true
+TabWidth: 4
+UseTab: ForIndentation
+ReferenceAlignment: Left
+IndentWidth: 4
+BreakBeforeTernaryOperators: false
+SpaceAfterCStyleCast: true
+
+DerivePointerAlignment: false
+PointerAlignment: Left
+
+# Includes
+IncludeBlocks: Regroup            # Regroup includes based on config
+IncludeCategories:
+  - Regex:           '(^"|\.hpp)'  # 'local' includes
+    Priority:        3
+    SortPriority:    0
+    CaseSensitive:   false
+  - Regex:           '\/'         # Library includes
+    Priority:        2
+    SortPriority:    0
+    CaseSensitive:   false
+  - Regex:           '.*'         # Everything else
+    Priority:        1
+    SortPriority:    0
+    CaseSensitive:   false
